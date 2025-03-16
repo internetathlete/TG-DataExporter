@@ -11,7 +11,8 @@ import base64  # 添加base64模块导入
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
                             QHBoxLayout, QLabel, QLineEdit, QPushButton, 
                             QTextEdit, QFileDialog, QProgressBar, QGroupBox,
-                            QComboBox, QMessageBox, QFrame, QSplitter, QStatusBar)
+                            QComboBox, QMessageBox, QFrame, QSplitter, QStatusBar,
+                            QScrollArea)  # 添加QScrollArea
 from PyQt5.QtCore import Qt, pyqtSignal, QObject, QSize
 from PyQt5.QtGui import QIcon, QPixmap, QFont
 
@@ -44,7 +45,7 @@ class TelegramExporterGUI(QMainWindow):
     def init_ui(self):
         """初始化UI组件"""
         self.setWindowTitle("Telegram数据自动导出工具")
-        self.setMinimumSize(800, 600)
+        self.setMinimumSize(900, 1200)  # 增加默认最小尺寸
         
         # 设置应用程序图标
         if LOGO_BASE64.strip():
@@ -104,17 +105,31 @@ class TelegramExporterGUI(QMainWindow):
         config_group = QGroupBox("配置")
         config_layout = QVBoxLayout(config_group)
         
-        # 客户端目录选择
-        client_layout = QHBoxLayout()
-        client_label = QLabel("客户端根目录:")
-        self.client_path_edit = QLineEdit()
-        self.client_path_edit.setPlaceholderText("选择包含Telegram客户端的根目录")
-        client_browse_btn = QPushButton("浏览...")
-        client_browse_btn.clicked.connect(self.browse_client_dir)
-        client_layout.addWidget(client_label)
-        client_layout.addWidget(self.client_path_edit, 1)
-        client_layout.addWidget(client_browse_btn)
-        config_layout.addLayout(client_layout)
+        # 创建滚动区域用于客户端路径
+        client_paths_scroll = QScrollArea()
+        client_paths_scroll.setWidgetResizable(True)
+        client_paths_scroll.setMinimumHeight(150)  # 设置最小高度
+        client_paths_widget = QWidget()
+        client_paths_scroll.setWidget(client_paths_widget)
+        
+        # 客户端目录选择 - 改为动态添加的容器
+        self.client_paths_container = QVBoxLayout(client_paths_widget)
+        self.client_paths_container.setContentsMargins(5, 5, 5, 5)
+        self.client_paths_container.setSpacing(10)
+        
+        # 添加第一个客户端目录选择行
+        self.add_client_path_row()
+        
+        # 添加"添加路径"按钮
+        add_path_layout = QHBoxLayout()
+        add_path_layout.addStretch(1)
+        add_path_btn = QPushButton("添加客户端路径")
+        add_path_btn.clicked.connect(self.add_client_path_row)
+        add_path_layout.addWidget(add_path_btn)
+        
+        # 将滚动区域和添加按钮添加到配置布局
+        config_layout.addWidget(client_paths_scroll)
+        config_layout.addLayout(add_path_layout)
         
         # 导出目录选择
         export_layout = QHBoxLayout()
@@ -233,6 +248,59 @@ class TelegramExporterGUI(QMainWindow):
         self.signals.export_finished.connect(self.export_finished)
         self.signals.client_processed.connect(self.client_processed)
     
+    def add_client_path_row(self):
+        """添加一个新的客户端路径输入行"""
+        row_layout = QHBoxLayout()
+        
+        # 如果是第一行，添加标签
+        if self.client_paths_container.count() == 0:
+            client_label = QLabel("客户端根目录:")
+            row_layout.addWidget(client_label)
+        else:
+            # 如果不是第一行，添加空白标签保持对齐
+            empty_label = QLabel("")
+            row_layout.addWidget(empty_label)
+        
+        # 路径输入框
+        path_edit = QLineEdit()
+        path_edit.setPlaceholderText(f"选择包含Telegram客户端的根目录 #{self.client_paths_container.count()+1}")
+        
+        # 浏览按钮
+        browse_btn = QPushButton("浏览...")
+        browse_btn.clicked.connect(lambda: self.browse_client_dir_for_row(path_edit))
+        
+        # 删除按钮 (第一行不显示删除按钮)
+        if self.client_paths_container.count() > 0:
+            delete_btn = QPushButton("删除")
+            delete_btn.clicked.connect(lambda: self.delete_client_path_row(row_layout))
+            row_layout.addWidget(path_edit, 1)
+            row_layout.addWidget(browse_btn)
+            row_layout.addWidget(delete_btn)
+        else:
+            row_layout.addWidget(path_edit, 1)
+            row_layout.addWidget(browse_btn)
+        
+        # 将行添加到容器
+        self.client_paths_container.addLayout(row_layout)
+    
+    def browse_client_dir_for_row(self, line_edit):
+        """为特定行浏览选择客户端目录"""
+        dir_path = QFileDialog.getExistingDirectory(self, "选择客户端根目录")
+        if dir_path:
+            line_edit.setText(dir_path)
+    
+    def delete_client_path_row(self, row_layout):
+        """删除一个客户端路径输入行"""
+        # 移除行中的所有控件
+        while row_layout.count():
+            item = row_layout.takeAt(0)
+            widget = item.widget()
+            if widget:
+                widget.deleteLater()
+        
+        # 从容器中移除行布局
+        self.client_paths_container.removeItem(row_layout)
+    
     def browse_client_dir(self):
         """浏览选择客户端目录"""
         dir_path = QFileDialog.getExistingDirectory(self, "选择客户端根目录")
@@ -247,12 +315,22 @@ class TelegramExporterGUI(QMainWindow):
     
     def start_export(self):
         """开始导出过程"""
-        # 检查输入
-        client_dir = self.client_path_edit.text().strip()
+        # 收集所有客户端目录
+        client_dirs = []
+        for i in range(self.client_paths_container.count()):
+            layout = self.client_paths_container.itemAt(i)
+            for j in range(layout.count()):
+                item = layout.itemAt(j)
+                widget = item.widget()
+                if isinstance(widget, QLineEdit):
+                    path = widget.text().strip()
+                    if path:
+                        client_dirs.append(path)
+        
         export_dir = self.export_path_edit.text().strip()
         
-        if not client_dir or not export_dir:
-            QMessageBox.warning(self, "输入错误", "请填写客户端根目录和导出目录")
+        if not client_dirs or not export_dir:
+            QMessageBox.warning(self, "输入错误", "请填写至少一个客户端根目录和导出目录")
             return
         
         # 检查截图目录
@@ -280,7 +358,7 @@ class TelegramExporterGUI(QMainWindow):
         # 启动导出线程
         self.export_thread = threading.Thread(
             target=self.run_export,
-            args=(client_dir, export_dir)  # 移除language参数
+            args=(client_dirs, export_dir)  # 传递目录列表
         )
         self.export_thread.daemon = True
         self.export_thread.start()
@@ -292,64 +370,42 @@ class TelegramExporterGUI(QMainWindow):
             self.update_status("正在停止...", PROCESSING_STYLE)
             self.stop_btn.setEnabled(False)
     
-    def run_export(self, client_dir, export_dir):
+    def progress_callback(self, message):
+        """处理进度回调，同时更新日志和进度条"""
+        self.signals.update_log.emit(message)
+        
+        # 检查消息是否包含进度信息
+        if "处理进度：" in message:
+            try:
+                # 从消息中提取进度信息
+                progress_info = message.split("处理进度：")[1].split("/")[0]
+                total_info = message.split("/")[1].split("\n")[0]
+                current = int(progress_info.strip())
+                total = int(total_info.strip())
+                
+                # 更新进度条
+                self.signals.update_progress.emit(current, total)
+            except Exception as e:
+                logging.debug(f"解析进度信息失败: {str(e)}")
+
+    def run_export(self, client_dirs, export_dir):
         """在后台线程中运行导出过程"""
         try:
-            # 查找所有客户端
-            clients = []
-            for root, dirs, files in os.walk(client_dir):
-                if "最新.exe" in files:
-                    clients.append(os.path.join(root, "最新.exe"))
+            # 使用exporter的run_export函数处理多个目录
+            result = exporter.run_export(
+                client_dirs, 
+                export_dir,
+                callback=self.progress_callback  # 使用专门的进度回调函数
+            )
             
-            if not clients:
-                self.signals.update_log.emit("未找到任何客户端，请检查目录")
-                self.signals.update_status.emit("未找到客户端", FAILURE_STYLE)
+            if "error" in result:
+                self.signals.update_log.emit(f"导出过程发生错误: {result['error']}")
+                self.signals.update_status.emit("导出失败", FAILURE_STYLE)
                 self.signals.export_finished.emit([])
                 return
             
-            self.signals.update_log.emit(f"找到 {len(clients)} 个客户端")
-            self.signals.update_progress.emit(0, len(clients))
-            
-            # 记录失败的客户端
-            failed_clients = []
-            
-            # 批量处理
-            for idx, exe_path in enumerate(clients, 1):
-                if self.stop_requested:
-                    self.signals.update_log.emit("用户请求停止，中断处理")
-                    break
-                
-                client_dir_name = os.path.basename(os.path.dirname(exe_path))
-                self.signals.update_log.emit(f"\n处理进度：{idx}/{len(clients)}")
-                self.signals.update_log.emit(f"正在处理：{client_dir_name}")
-                self.signals.update_progress.emit(idx, len(clients))
-                
-                try:
-                    # 执行导出
-                    export_success = exporter.export_telegram_data(exe_path, export_dir)
-                    
-                    # 根据返回值判断是否成功
-                    if export_success is False:
-                        self.signals.update_log.emit(f"警告：客户端 {client_dir_name} 未成功导出数据")
-                        failed_clients.append(os.path.dirname(exe_path))
-                        self.signals.client_processed.emit(client_dir_name, False)
-                    elif export_success is None:
-                        self.signals.update_log.emit(f"警告：客户端 {client_dir_name} 未处理 (可能未登录或状态异常)")
-                        failed_clients.append(os.path.dirname(exe_path))
-                        self.signals.client_processed.emit(client_dir_name, False)
-                    else:
-                        self.signals.update_log.emit(f"客户端 {client_dir_name} 数据导出成功")
-                        self.signals.client_processed.emit(client_dir_name, True)
-                except Exception as e:
-                    self.signals.update_log.emit(f"错误：客户端 {client_dir_name} 导出失败 - {str(e)}")
-                    failed_clients.append(os.path.dirname(exe_path))
-                    self.signals.client_processed.emit(client_dir_name, False)
-                
-                # 等待一段时间再处理下一个
-                time.sleep(5)
-            
             # 处理完成
-            self.signals.export_finished.emit(failed_clients)
+            self.signals.export_finished.emit(result.get("failed_list", []))
             
         except Exception as e:
             self.signals.update_log.emit(f"导出过程发生错误: {str(e)}")
